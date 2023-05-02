@@ -225,12 +225,43 @@ impl <'a>Lexer<'a> {
     fn is_not_empty(&self) -> bool {
         self.cursor < self.src.len()
     }
+    fn is_not_empty_offset(&self, offset: usize) -> bool {
+        self.cursor+offset < self.src.len()
+    }
     fn new(source: &'a String) -> Self {
         Self { 
             src: source,
             cursor: 0, 
             currentLocation: ProgramLocation { file: String::new(), linenumber: 1, character: 0 },
         }
+    }
+    fn drop_char(&mut self) {
+        if self.is_not_empty() {
+            if self.cchar() == '\n' {
+                self.currentLocation.linenumber += 1;
+                self.currentLocation.character = 0;
+            } else {
+                self.currentLocation.character += 1;
+            }
+            self.cursor += 1;
+        }
+    }
+    fn drop_line(&mut self) {
+        while self.is_not_empty() && self.src.chars().nth(self.cursor).unwrap() != '\n' {
+            self.cursor += 1;
+        }
+        self.cursor += 1;
+        self.currentLocation.character = 0;
+        self.currentLocation.linenumber += 1;
+    }
+    fn cchar(&self) -> char {
+        self.src.chars().nth(self.cursor).unwrap()
+    }
+    fn cchar_offset(&self, offset: usize) -> Option<char> {
+        if self.is_not_empty_offset(offset) {
+            return Some(self.src.chars().nth(self.cursor+offset).unwrap())
+        }
+        None
     }
 }
 impl Iterator for Lexer<'_> {
@@ -239,10 +270,25 @@ impl Iterator for Lexer<'_> {
         self.trim_left();
         if self.is_not_empty() {
             let mut outstr: String = String::new();
-            let mut c = self.src.chars().nth(self.cursor).unwrap();
+            let mut c = self.cchar();
             match c {
+                '/' => {
+                    self.drop_char();
+                    let next = self.cchar();
+                    if next == '/' {
+                        self.drop_line();
+                    }
+                    else if next == '*' {
+                        self.drop_char();
+                        while self.is_not_empty_offset(1) && self.cchar() != '*' &&  self.cchar_offset(1).unwrap() != '/' {
+                            self.drop_char()
+                        }
+                        self.drop_char();
+                        self.drop_char();
+                    }
+                    return self.next();
+                }
                 '"' => {
-                    //println!("String begin: {}:\n\n",self.currentLocation.loc_display());
                     let mut should_skip_next = true;
                     self.cursor += 1;
                     self.currentLocation.character += 1;
@@ -264,7 +310,6 @@ impl Iterator for Lexer<'_> {
                     return Some(Token { typ: TokenType::STRING(outstr), loc: self.currentLocation.clone()});
                 }
                 _ => {
-                    //println!("C: {}",c);
                     if !c.is_alphabetic() {
                         outstr.push(c);
                         self.cursor += 1;
@@ -534,7 +579,6 @@ fn build_to_js(build: &mut Build, program: &CmdProgram) -> std::io::Result<()>{
         if func_name != "main" {
             writeln!(&mut f, "}}")?;
         }
-        //writeln!(&mut f, "Hello World!")?;
     }
     Ok(())
 }
