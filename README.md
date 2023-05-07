@@ -42,3 +42,24 @@ fn add(a: number, b: number) -> number {
     ret a+b;
 }
 ```
+
+### Comments
+
+**Added in:** [0.0.2A](versions.md#002a)
+
+### Big comments
+
+Big comments are made with /* */ and are used to quickly comment out big sections of code or for documentation.
+
+### Normal comments
+
+Normal (Small) comments are comments that are only for one line //.
+
+**Example(s)**:
+```sl
+/*
+Hello!
+This is a big comment
+*/
+// And this is a small comment
+```

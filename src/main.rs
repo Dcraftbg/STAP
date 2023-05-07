@@ -4,6 +4,7 @@
 #![allow(unused_macros)]
 #![allow(unused_imports)]
 #![allow(unreachable_patterns)]
+use std::cell::RefCell;
 use std::fmt::write;
 use std::io::Write;
 macro_rules! par_error {
@@ -97,6 +98,8 @@ macro_rules! com_assert {
     });
 }
 
+use std::rc::Rc;
+use std::sync::Mutex;
 use std::{fs::{self, File}, env::{args, self}, process::exit, collections::HashMap, path::Path, fmt::{Display, self, Debug}, char::UNICODE_VERSION};
 
 fn unescape(stri: &String) -> String {
@@ -374,13 +377,14 @@ impl Token {
 }
 #[derive(Clone, Debug)]
 enum Instruction {
-    WRITERAW(String)
+    WRITERAW(String),
+    EXPANDSCOPE(Rc<RefCell<Scope>>)
 }
 type ScopeBody = Vec<Instruction>;
-type FunctionBody = Vec<Scope>;
+type FunctionBody = ScopeBody;
 #[derive(Debug)]
 struct Function {
-    body: usize,
+    body: Rc<RefCell<Scope>>,
     loc: ProgramLocation
 }
 
@@ -409,11 +413,10 @@ impl Namespace {
 struct Build {
     functions: HashMap<String, Function>,
     namespaces: HashMap<String, Namespace>,
-    scopeStack: Vec<Scope>
 }
 impl Build {
     fn new() -> Self {
-        Self { functions: HashMap::new(), namespaces: HashMap::new(), scopeStack: Vec::new() }
+        Self { functions: HashMap::new(), namespaces: HashMap::new() }
     }
 }
 #[derive(Clone,PartialEq, Debug)]
@@ -444,6 +447,8 @@ struct CmdProgram {
 }
 fn parse_tokens_to_build(lexer: &mut Lexer, _program: &CmdProgram) -> Build {
     let mut build: Build = Build::new();
+    let mut scopeStack: Vec<Rc<RefCell<Scope>>> = Vec::new();
+
     let currentFunc: Option<String> = None;
     /*
 
@@ -455,7 +460,6 @@ fn parse_tokens_to_build(lexer: &mut Lexer, _program: &CmdProgram) -> Build {
     }
 
     */
-    let mut current_scope: i64 = -1;
     while let Some(token) = lexer.next() {
         match &token.typ {
             TokenType::Intrinsic(typ) => {
@@ -465,9 +469,8 @@ fn parse_tokens_to_build(lexer: &mut Lexer, _program: &CmdProgram) -> Build {
                         let nametoken = par_expect!(lexer.currentLocation, lexer.next(), "Error: Abruptly ran out of tokens for function declaration!");
                         match &nametoken.typ {
                             TokenType::Word(name) => {
-                                current_scope += 1;
-                                par_assert!(nametoken,build.functions.insert(name.clone(), Function { body: current_scope as usize, loc: lexer.currentLocation.clone()}).is_none(), "Error: redefinition of function {}",name);
-                                build.scopeStack.push(Scope::new(ScopeType::FUNC));
+                                par_assert!(nametoken,build.functions.insert(name.clone(), Function { body: Rc::new(RefCell::new(Scope::new(ScopeType::FUNC))), loc: lexer.currentLocation.clone()}).is_none(), "Error: redefinition of function {}",name);
+                                scopeStack.push(build.functions.get(name).unwrap().body.clone());
                             },
                             _ => {
                                 par_error!(nametoken,"Error: Unexpected token type {} in function declaration",nametoken.typ.to_string(false));
@@ -483,18 +486,33 @@ fn parse_tokens_to_build(lexer: &mut Lexer, _program: &CmdProgram) -> Build {
                     }
                     IntrinsicType::OPENCURLY => {
 
-                        let len = build.scopeStack.len();
-                        par_assert!(token, len>0 && current_scope > -1, "Error: Unexpected OPENCURLY!");
-                        let s = build.scopeStack.get_mut(len-1).unwrap();                            
+                        let len = scopeStack.len();
+                        par_assert!(token, len>0, "Error: Unexpected OPENCURLY!");
+                        let s = scopeStack.get_mut(len-1).unwrap();
+                        let mut s = s.borrow_mut();
                         par_assert!(token, !s.isset, "Error: Multiple opens on an already closed scope!");
                         s.isset = true;
                     },
                     IntrinsicType::CLOSECURLY => {
-                        par_assert!(token, build.scopeStack.len() > 0 && current_scope > -1, "Error: Unexpected close when no open has occured!");
-                        current_scope -= 1;
+                        let mut len = scopeStack.len();
+                        par_assert!(token, len>0, "Error: Unexpected close when no open has occured!");
+                        let sorg = scopeStack.pop().unwrap();
+                        let s = sorg.borrow_mut();
+                        len -= 1;
+                        match s.typ {
+                            ScopeType::FUNC => {
+                                par_assert!(token, len == 0, "TODO: Add sub line functions");
+                            },
+                            ScopeType::NONE => {
+                                par_assert!(token, len>0, "Error: Unexpected Open and close paren outside of any scope!");
+                                let parent = scopeStack.get_mut(len-1).unwrap();
+                                let mut parent = parent.borrow_mut();
+                                parent.body.push(Instruction::EXPANDSCOPE(sorg.clone()));
+                            },
+                        }
                     },
                     IntrinsicType::JS => {
-                        par_assert!(token, current_scope > -1, "Unexpected js Intrinsic outside of scope!");
+                        par_assert!(token, scopeStack.len() > 0, "Unexpected js Intrinsic outside of scope!");
                         let nt = par_expect!(lexer.currentLocation, lexer.next(), "Abruptly ran out of tokens");
                         match &nt.typ {
                             TokenType::Intrinsic(typ) => {
@@ -513,8 +531,9 @@ fn parse_tokens_to_build(lexer: &mut Lexer, _program: &CmdProgram) -> Build {
                                             }
                                             ct = par_expect!(lexer.currentLocation, lexer.next(),"Error: Unexpectedly ran out of tokens for scope at {}",lexer.cursor);
                                         }
-                                        let currentScope = build.scopeStack.get_mut(current_scope as usize).unwrap();
-                                        currentScope.body.push(Instruction::WRITERAW(body));
+                                        let len = scopeStack.len();
+                                        let currentScope = scopeStack.get_mut(len-1).unwrap();
+                                        currentScope.borrow_mut().body.push(Instruction::WRITERAW(body));
                                     },
                                     _ => {
                                         par_error!(nt, "Error: Unexpected intrinsic type: {}",typ.to_string(false))
@@ -546,40 +565,44 @@ macro_rules! js_write {
 
         let message = format!($($arg)*);
         let message = format!("{}{}",indent_to_string($indent),message);
-        write!(&mut $f, "{}", message)   
+        write!($f, "{}", message)   
     });
 }
 macro_rules! js_writeln {
     ($f: expr, $indent: expr,$($arg:tt)*) => ({
-
         let message = format!($($arg)*);
         let message = format!("{}{}",indent_to_string($indent),message);
-        writeln!(&mut $f, "{}", message)   
+        writeln!(&f, "{}", message)   
     });
 }
-fn build_to_js(build: &mut Build, program: &CmdProgram) -> std::io::Result<()>{
+fn handle_js_scope(f: &mut File, _build: &Build, _program: &CmdProgram, scope: &Scope, tab: usize) -> std::io::Result<()>{
+    for inst in scope.body.iter() {
+        match inst {
+            Instruction::WRITERAW(data) => {
+                js_write!(f, tab, "{}", data)?;
+            },
+            Instruction::EXPANDSCOPE(_) => todo!(),
+        }
+    }
+    Ok(())
+}
+fn build_to_js(build: &Build, program: &CmdProgram) -> std::io::Result<()>{
     let mut f = File::create(&program.opath).expect(&format!("Error: could not open output file {}",program.opath.as_str()));
-    let mut indent: usize;
     for (func_name, func) in build.functions.iter() {
+        let body = &func.body;
         if func_name == "main" {
-            indent = 0;
+            handle_js_scope(&mut f, build, program, &body.borrow(), 0)?
         }
         else {
             writeln!(&mut f, "function {}() {{",func_name)?;
-            indent = 1;
-        }
-        let body = build.scopeStack.get(func.body).expect("Unknown function body provided!");
-        for inst in body.body.iter() {
-            match inst {
-                Instruction::WRITERAW(data) => {
-                    js_write!(f, indent, "{}", data)?
-                },
-            }
         }
         if func_name != "main" {
             writeln!(&mut f, "}}")?;
         }
     }
+    // for key in build.functions.keys() {
+
+    // }
     Ok(())
 }
 fn usage(program: &String) {
