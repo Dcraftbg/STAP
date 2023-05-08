@@ -51,6 +51,7 @@ extern namespace console {
 fn main() {
     js {
         "console.log(\"Goodbye World!\");\n"
-        "console.log(\"Hello World!\");"
+        "console.log(\"Hello World!\");\n"
+        "process.exit(69)"
     }
 }

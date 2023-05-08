@@ -664,6 +664,9 @@ fn main() {
                 let mut cmd = Command::new("node".to_string()).args([cmdprogram.opath]).stdin(Stdio::inherit()).stdout(Stdio::inherit()).stderr(Stdio::inherit()).spawn().expect("Could not build with node!");
                 let status = cmd.wait().unwrap();
                 println!("-------------");
+                println!("And exited with error code: {}",status.code().unwrap());
+                println!("-------------");
+                
             }
         }
         _ => {
