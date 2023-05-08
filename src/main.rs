@@ -6,7 +6,7 @@
 #![allow(unreachable_patterns)]
 use std::cell::RefCell;
 use std::fmt::write;
-use std::io::Write;
+use std::io::{Write, Stdin};
 macro_rules! par_error {
     ($token:expr, $($arg:tt)*) => ({
         let message = format!($($arg)*);
@@ -98,6 +98,7 @@ macro_rules! com_assert {
     });
 }
 
+use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::sync::Mutex;
 use std::{fs::{self, File}, env::{args, self}, process::exit, collections::HashMap, path::Path, fmt::{Display, self, Debug}, char::UNICODE_VERSION};
@@ -444,6 +445,7 @@ impl Scope {
 struct CmdProgram {
     path: String,
     opath: String,
+    should_run: bool
 }
 fn parse_tokens_to_build(lexer: &mut Lexer, _program: &CmdProgram) -> Build {
     let mut build: Build = Build::new();
@@ -630,6 +632,9 @@ fn main() {
                 cmdprogram.opath = args.get(i).expect("Error: No target specified").to_string();
                 i += 1;
             }
+            "-r" => {
+                cmdprogram.should_run = true
+            }
             _ => {
                 eprintln!("Unknown argument: {}",arg);
                 exit(1);
@@ -652,6 +657,14 @@ fn main() {
     match target.as_str() {
         "js" => {
             build_to_js(&mut build, &cmdprogram).expect("Could not build to javascript!");
+            if cmdprogram.should_run {
+                println!("-------------");
+                println!("   * node {}",cmdprogram.opath);
+                println!("-------------");
+                let mut cmd = Command::new("node".to_string()).args([cmdprogram.opath]).stdin(Stdio::inherit()).stdout(Stdio::inherit()).stderr(Stdio::inherit()).spawn().expect("Could not build with node!");
+                let status = cmd.wait().unwrap();
+                println!("-------------");
+            }
         }
         _ => {
             todo!("Unreachable")
